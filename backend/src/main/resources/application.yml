@@ -1,0 +1,62 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: fintech-core-ledger-engine
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/fintech_ledger?currentSchema=ledger}
+    username: ${SPRING_DATASOURCE_USERNAME:fintech_admin}
+    password: ${SPRING_DATASOURCE_PASSWORD:fintech_secret_change_in_prod}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: FintechLedgerHikariPool
+      maximum-pool-size: 25
+      minimum-idle: 5
+      idle-timeout: 300000
+      max-lifetime: 1800000
+      connection-timeout: 20000
+      leak-detection-threshold: 2000
+
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: ledger
+        format_sql: true
+        jdbc:
+          batch_size: 50
+          order_inserts: true
+          order_updates: true
+
+  flyway:
+    enabled: true
+    schemas:
+      - ledger
+    default-schema: ledger
+    locations:
+      - classpath:db/migration
+    baseline-on-migrate: true
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: when-authorized
+      probes:
+        enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+  api-docs:
+    path: /v3/api-docs
