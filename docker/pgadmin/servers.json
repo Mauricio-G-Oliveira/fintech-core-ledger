@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "Fintech Ledger PostgreSQL (Local)",
+      "Group": "Servers",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "fintech_ledger",
+      "Username": "fintech_admin",
+      "SSLMode": "prefer"
+    }
+  }
+}
