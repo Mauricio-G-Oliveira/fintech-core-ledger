@@ -165,16 +165,18 @@ O repositório segue governança estrita de branches e Pull Requests:
   * [PR #1: feat(infra): PostgreSQL 16 and pgAdmin 4 container orchestration](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/1) (Merged)
   * [PR #2: feat(backend): Java 21, Spring Boot 3.3 Core Ledger & Flyway V1 schema](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/2) (Merged)
   * [PR #3: feat(frontend): Fintech Ledger interactive dashboard, double-entry meter & simulator](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/3) (Merged)
+  * [PR #4: feat(domain): core double-entry domain models, Money VO & invariant rules](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/4) (Merged)
+  * [PR #5: feat(application): instant transfer usecase, deterministic anti-deadlock locking & idempotency guard](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/5) (Merged)
 * `gh-pages`: Branch isolada de entrega contínua dos assets do frontend.
 
 ---
 
-## 📋 Próximas Fases de Engenharia
+## 📋 Fases do Projeto & Roadmap de Engenharia
 - [x] **Fase 1 (Concluída):** Arquitetura limpa, Docker Compose, Schema Flyway V1, UI interativa com GitHub Pages e governança Gitflow.
-- [ ] **Fase 2:** Domínio Rico (`Money`, `Account`, `LedgerTransaction`, `LedgerEntry`) com testes de invariante contábil.
-- [ ] **Fase 3:** Caso de Uso de Transferência Instantânea com travamento determinístico anti-deadlock.
-- [ ] **Fase 4:** Interceptor HTTP de idempotência com TTL em cache.
-- [ ] **Fase 5:** Suíte de estresse com **Testcontainers** simulando concorrência massiva de 100 threads simultâneas.
+- [x] **Fase 2 (Concluída):** Domínio Rico (`Money`, `Account`, `LedgerTransaction`, `LedgerEntry`) com testes de invariante contábil e selo SHA-256.
+- [x] **Fase 3 (Concluída):** Caso de Uso de Transferência Instantânea (`InstantTransferUseCase`) com algoritmo determinístico anti-deadlock e proteção estrita contra duplicações (Idempotência).
+- [ ] **Fase 4:** Adaptadores de Infraestrutura & Persistência JPA (`PostgreSqlAccountRepository`, `PostgreSqlTransactionRepository`, `PostgreSqlIdempotencyRepository`) e Interceptor HTTP REST.
+- [ ] **Fase 5:** Suíte de estresse e concorrência massiva com **Testcontainers** simulando 100 requisições simultâneas em PostgreSQL real.
 
 ---
 
