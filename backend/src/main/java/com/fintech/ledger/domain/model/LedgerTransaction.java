@@ -133,6 +133,24 @@ public class LedgerTransaction {
         );
     }
 
+    public static LedgerTransaction reconstitute(UUID id, String idempotencyKey, TransactionType type,
+                                                 TransactionStatus status, Money amount, String description,
+                                                 Integer settlementLatencyMs, String hash, Instant createdAt,
+                                                 List<LedgerEntry> entries) {
+        return new LedgerTransaction(
+            id,
+            idempotencyKey,
+            type,
+            status,
+            amount,
+            description,
+            settlementLatencyMs,
+            hash,
+            createdAt,
+            entries
+        );
+    }
+
     private static String calculateHash(UUID id, String idempotencyKey, Money amount, 
                                         List<LedgerEntry> entries, Instant createdAt) {
         try {
