@@ -1,0 +1,23 @@
+spring:
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: ledger
+        format_sql: false
+
+  flyway:
+    enabled: true
+    schemas:
+      - ledger
+    default-schema: ledger
+    locations:
+      - classpath:db/migration
+
+logging:
+  level:
+    com.fintech.ledger: INFO
+    org.hibernate.SQL: WARN
