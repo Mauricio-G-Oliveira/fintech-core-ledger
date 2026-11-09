@@ -16,8 +16,10 @@ import com.fintech.ledger.domain.repository.AccountRepositoryPort;
 import com.fintech.ledger.domain.repository.IdempotencyRepositoryPort;
 import com.fintech.ledger.domain.repository.LedgerTransactionRepositoryPort;
 import com.fintech.ledger.domain.service.DoubleEntryRuleEngine;
+import com.fintech.ledger.application.port.LedgerMetricsPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -54,17 +56,29 @@ public class InstantTransferService implements InstantTransferUseCase {
     private final IdempotencyRepositoryPort idempotencyRepositoryPort;
     private final DoubleEntryRuleEngine doubleEntryRuleEngine;
     private final ObjectMapper objectMapper;
+    private final LedgerMetricsPort metricsPort;
 
     public InstantTransferService(AccountRepositoryPort accountRepositoryPort,
                                   LedgerTransactionRepositoryPort ledgerTransactionRepositoryPort,
                                   IdempotencyRepositoryPort idempotencyRepositoryPort,
                                   DoubleEntryRuleEngine doubleEntryRuleEngine,
                                   ObjectMapper objectMapper) {
+        this(accountRepositoryPort, ledgerTransactionRepositoryPort, idempotencyRepositoryPort, doubleEntryRuleEngine, objectMapper, null);
+    }
+
+    @Autowired
+    public InstantTransferService(AccountRepositoryPort accountRepositoryPort,
+                                  LedgerTransactionRepositoryPort ledgerTransactionRepositoryPort,
+                                  IdempotencyRepositoryPort idempotencyRepositoryPort,
+                                  DoubleEntryRuleEngine doubleEntryRuleEngine,
+                                  ObjectMapper objectMapper,
+                                  @Autowired(required = false) LedgerMetricsPort metricsPort) {
         this.accountRepositoryPort = accountRepositoryPort;
         this.ledgerTransactionRepositoryPort = ledgerTransactionRepositoryPort;
         this.idempotencyRepositoryPort = idempotencyRepositoryPort;
         this.doubleEntryRuleEngine = doubleEntryRuleEngine;
         this.objectMapper = objectMapper;
+        this.metricsPort = metricsPort;
     }
 
     @Override
@@ -83,7 +97,11 @@ public class InstantTransferService implements InstantTransferUseCase {
                 );
             }
             log.info("Idempotent replay detected for key: {}", command.idempotencyKey());
-            return deserializeCachedResult(existingRecord.responseBody());
+            TransferResult replayResult = deserializeCachedResult(existingRecord.responseBody());
+            if (metricsPort != null) {
+                metricsPort.recordTransfer(replayResult.status(), true, System.currentTimeMillis() - startTime);
+            }
+            return replayResult;
         }
 
         // 2. Deadlock-Free Deterministic Lock Acquisition (Ordered by UUID ascending)
@@ -152,6 +170,10 @@ public class InstantTransferService implements InstantTransferUseCase {
             Instant.now().plusSeconds(86400) // 24h retention
         );
         idempotencyRepositoryPort.save(idempotencyRecord);
+
+        if (metricsPort != null) {
+            metricsPort.recordTransfer(transaction.getStatus(), false, latencyMs);
+        }
 
         log.info("Successfully settled transaction {} with idempotency key {}", transactionId, command.idempotencyKey());
         return result;

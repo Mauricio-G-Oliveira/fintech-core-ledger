@@ -18,4 +18,8 @@ public interface InstantTransferUseCase {
      * @return TransferResult containing settlement details and ledger legs
      */
     TransferResult transfer(TransferCommand command);
+
+    default TransferResult execute(TransferCommand command) {
+        return transfer(command);
+    }
 }
