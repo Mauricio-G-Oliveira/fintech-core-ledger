@@ -323,4 +323,59 @@ class InstantTransferServiceTest {
 
         assertThrows(InvalidCurrencyException.class, () -> transferService.transfer(command));
     }
+
+    @Test
+    @DisplayName("Transactional Outbox: Should save pending OutboxEvent when OutboxRepositoryPort is configured")
+    void shouldRecordOutboxEventWhenOutboxPortIsConfigured() {
+        com.fintech.ledger.domain.repository.OutboxRepositoryPort mockOutboxRepo = 
+                org.mockito.Mockito.mock(com.fintech.ledger.domain.repository.OutboxRepositoryPort.class);
+
+        InstantTransferService serviceWithOutbox = new InstantTransferService(
+                accountRepositoryPort,
+                ledgerTransactionRepositoryPort,
+                idempotencyRepositoryPort,
+                new DoubleEntryRuleEngine(),
+                objectMapper,
+                null,
+                mockOutboxRepo
+        );
+
+        UUID sourceId = UUID.randomUUID();
+        UUID destId = UUID.randomUUID();
+
+        Account sourceAcc = Account.create("2.1.01.001", "Client A", AccountType.LIABILITY, Money.brl(1000.00));
+        Account destAcc = Account.create("2.1.02.001", "Client B", AccountType.LIABILITY, Money.brl(500.00));
+
+        Account mockSource = new Account(sourceId, sourceAcc.getCode(), sourceAcc.getName(), sourceAcc.getType(),
+                sourceAcc.getBalance(), sourceAcc.getStatus(), 0L, Instant.now(), Instant.now());
+        Account mockDest = new Account(destId, destAcc.getCode(), destAcc.getName(), destAcc.getType(),
+                destAcc.getBalance(), destAcc.getStatus(), 0L, Instant.now(), Instant.now());
+
+        when(idempotencyRepositoryPort.findByKey("idem-outbox-001")).thenReturn(Optional.empty());
+        when(accountRepositoryPort.findByIdsForUpdate(any())).thenReturn(List.of(mockSource, mockDest));
+
+        TransferCommand command = new TransferCommand(
+                sourceId,
+                destId,
+                new BigDecimal("200.00"),
+                "BRL",
+                "idem-outbox-001",
+                "Outbox Test"
+        );
+
+        TransferResult result = serviceWithOutbox.transfer(command);
+
+        assertNotNull(result);
+        org.mockito.ArgumentCaptor<com.fintech.ledger.domain.model.OutboxEvent> outboxCaptor = 
+                org.mockito.ArgumentCaptor.forClass(com.fintech.ledger.domain.model.OutboxEvent.class);
+        verify(mockOutboxRepo).save(outboxCaptor.capture());
+
+        com.fintech.ledger.domain.model.OutboxEvent savedEvent = outboxCaptor.getValue();
+        assertEquals("TRANSACTION", savedEvent.getAggregateType());
+        assertEquals(result.transactionId(), savedEvent.getAggregateId());
+        assertEquals("TRANSFER_SETTLED", savedEvent.getEventType());
+        assertEquals(com.fintech.ledger.domain.model.OutboxStatus.PENDING, savedEvent.getStatus());
+        assertTrue(savedEvent.getPayload().contains("idem-outbox-001"));
+        assertTrue(savedEvent.getPayload().contains("200.00"));
+    }
 }

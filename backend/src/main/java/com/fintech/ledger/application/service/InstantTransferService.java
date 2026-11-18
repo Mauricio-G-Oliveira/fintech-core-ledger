@@ -17,6 +17,9 @@ import com.fintech.ledger.domain.repository.IdempotencyRepositoryPort;
 import com.fintech.ledger.domain.repository.LedgerTransactionRepositoryPort;
 import com.fintech.ledger.domain.service.DoubleEntryRuleEngine;
 import com.fintech.ledger.application.port.LedgerMetricsPort;
+import com.fintech.ledger.domain.event.TransferSettledEvent;
+import com.fintech.ledger.domain.model.OutboxEvent;
+import com.fintech.ledger.domain.repository.OutboxRepositoryPort;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -57,13 +60,23 @@ public class InstantTransferService implements InstantTransferUseCase {
     private final DoubleEntryRuleEngine doubleEntryRuleEngine;
     private final ObjectMapper objectMapper;
     private final LedgerMetricsPort metricsPort;
+    private final OutboxRepositoryPort outboxRepositoryPort;
 
     public InstantTransferService(AccountRepositoryPort accountRepositoryPort,
                                   LedgerTransactionRepositoryPort ledgerTransactionRepositoryPort,
                                   IdempotencyRepositoryPort idempotencyRepositoryPort,
                                   DoubleEntryRuleEngine doubleEntryRuleEngine,
                                   ObjectMapper objectMapper) {
-        this(accountRepositoryPort, ledgerTransactionRepositoryPort, idempotencyRepositoryPort, doubleEntryRuleEngine, objectMapper, null);
+        this(accountRepositoryPort, ledgerTransactionRepositoryPort, idempotencyRepositoryPort, doubleEntryRuleEngine, objectMapper, null, null);
+    }
+
+    public InstantTransferService(AccountRepositoryPort accountRepositoryPort,
+                                  LedgerTransactionRepositoryPort ledgerTransactionRepositoryPort,
+                                  IdempotencyRepositoryPort idempotencyRepositoryPort,
+                                  DoubleEntryRuleEngine doubleEntryRuleEngine,
+                                  ObjectMapper objectMapper,
+                                  LedgerMetricsPort metricsPort) {
+        this(accountRepositoryPort, ledgerTransactionRepositoryPort, idempotencyRepositoryPort, doubleEntryRuleEngine, objectMapper, metricsPort, null);
     }
 
     @Autowired
@@ -72,13 +85,15 @@ public class InstantTransferService implements InstantTransferUseCase {
                                   IdempotencyRepositoryPort idempotencyRepositoryPort,
                                   DoubleEntryRuleEngine doubleEntryRuleEngine,
                                   ObjectMapper objectMapper,
-                                  @Autowired(required = false) LedgerMetricsPort metricsPort) {
+                                  @Autowired(required = false) LedgerMetricsPort metricsPort,
+                                  @Autowired(required = false) OutboxRepositoryPort outboxRepositoryPort) {
         this.accountRepositoryPort = accountRepositoryPort;
         this.ledgerTransactionRepositoryPort = ledgerTransactionRepositoryPort;
         this.idempotencyRepositoryPort = idempotencyRepositoryPort;
         this.doubleEntryRuleEngine = doubleEntryRuleEngine;
         this.objectMapper = objectMapper;
         this.metricsPort = metricsPort;
+        this.outboxRepositoryPort = outboxRepositoryPort;
     }
 
     @Override
@@ -170,6 +185,35 @@ public class InstantTransferService implements InstantTransferUseCase {
             Instant.now().plusSeconds(86400) // 24h retention
         );
         idempotencyRepositoryPort.save(idempotencyRecord);
+
+        // 7. Atomic Transactional Outbox Event
+        if (outboxRepositoryPort != null) {
+            TransferSettledEvent settledEvent = new TransferSettledEvent(
+                UUID.randomUUID(),
+                transactionId,
+                command.idempotencyKey(),
+                sourceAccount.getId(),
+                destinationAccount.getId(),
+                command.amount(),
+                command.currencyCode(),
+                command.description(),
+                transaction.getHash(),
+                Instant.now()
+            );
+            try {
+                String eventJson = objectMapper.writeValueAsString(settledEvent);
+                OutboxEvent outboxEvent = OutboxEvent.createPending(
+                    "TRANSACTION",
+                    transactionId,
+                    "TRANSFER_SETTLED",
+                    eventJson
+                );
+                outboxRepositoryPort.save(outboxEvent);
+            } catch (JsonProcessingException e) {
+                log.error("Failed to serialize TransferSettledEvent for outbox", e);
+                throw new IllegalStateException("Outbox serialization failure", e);
+            }
+        }
 
         if (metricsPort != null) {
             metricsPort.recordTransfer(transaction.getStatus(), false, latencyMs);
