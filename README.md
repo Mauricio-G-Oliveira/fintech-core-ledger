@@ -38,12 +38,14 @@ flowchart TD
     subgraph Client["Edge & Gateways"]
         REQ["Payment Request + Idempotency-Key"]
         SWAGGER["Swagger UI / OpenAPI 3.0"]
+        WEBHOOK_PARTNER["Downstream Partner Webhook Consumers"]
     end
 
     subgraph Presentation["Primary / Driving Adapters (Web)"]
         TC["TransferController (POST /transfers)"]
         AC["AccountController (GET /accounts)"]
         QC["TransactionController (GET /transactions)"]
+        WC["WebhookSimulatorController (POST /webhooks)"]
         EX["GlobalExceptionHandler (RFC 7807 ProblemDetail)"]
         SEC["Spring Security 6 (Stateless + CORS)"]
     end
@@ -53,6 +55,7 @@ flowchart TD
         AQUC["AccountQueryUseCase / AccountQueryService"]
         LQUC["LedgerQueryUseCase / LedgerQueryService"]
         METRICS_PORT["LedgerMetricsPort (Output Port)"]
+        SIGNER_PORT["WebhookSignerPort (Output Port)"]
     end
 
     subgraph Domain["Pure Domain Core (DDD - Zero Frameworks)"]
@@ -61,12 +64,17 @@ flowchart TD
         TX_AGG["LedgerTransaction (Merkle Root SHA-256)"]
         ENTRY["LedgerEntry (Append-Only DR/CR)"]
         ENGINE["DoubleEntryRuleEngine (Debit == Credit Invariant)"]
+        OUTBOX_AGG["OutboxEvent Aggregate (Transactional Outbox)"]
+        OUTBOX_PORT["OutboxRepositoryPort (Domain Port)"]
     end
 
-    subgraph Infrastructure["Secondary / Driven Adapters (Persistence & Observability)"]
+    subgraph Infrastructure["Secondary / Driven Adapters (Persistence, Security & Observability)"]
         ACC_ADAPTER["PostgreSqlAccountRepositoryAdapter"]
         TX_ADAPTER["PostgreSqlLedgerTransactionRepositoryAdapter"]
         IDEM_ADAPTER["PostgreSqlIdempotencyRepositoryAdapter"]
+        OUTBOX_ADAPTER["PostgreSqlOutboxRepositoryAdapter"]
+        DISPATCHER["OutboxDispatcher (Poller + Backoff Retries)"]
+        HMAC_SIGNER["HmacWebhookSigner (HMAC-SHA256 Timing-Safe)"]
         MICROMETER["LedgerMetrics (Prometheus & Micrometer)"]
         HEALTH["LedgerHealthIndicator (Actuator)"]
     end
@@ -76,20 +84,26 @@ flowchart TD
         DB_TX["ledger.transactions"]
         DB_ENTRIES["ledger.ledger_entries"]
         DB_IDEM["ledger.idempotency_records (JSONB + TTL)"]
+        DB_OUTBOX["ledger.outbox_events (PENDING / PUBLISHED / FAILED)"]
     end
 
     REQ --> TC
-    SWAGGER --> TC & AC & QC
+    SWAGGER --> TC & AC & QC & WC
     TC --> ITUC
     AC --> AQUC
     QC --> LQUC
     ITUC --> ENGINE
     ENGINE --> ACC_AGG & TX_AGG & ENTRY
-    ITUC --> ACC_ADAPTER & TX_ADAPTER & IDEM_ADAPTER & METRICS_PORT
+    ITUC --> ACC_ADAPTER & TX_ADAPTER & IDEM_ADAPTER & OUTBOX_PORT & METRICS_PORT
+    OUTBOX_PORT --> OUTBOX_ADAPTER
     METRICS_PORT --> MICROMETER
     ACC_ADAPTER --> DB_ACC
     TX_ADAPTER --> DB_TX & DB_ENTRIES
     IDEM_ADAPTER --> DB_IDEM
+    OUTBOX_ADAPTER --> DB_OUTBOX
+    DISPATCHER --> OUTBOX_PORT & SIGNER_PORT & DB_OUTBOX
+    SIGNER_PORT --> HMAC_SIGNER
+    DISPATCHER -.->|"POST with X-Ledger-Signature"| WEBHOOK_PARTNER
 ```
 
 ### 1. Ledger Imutável por Partidas Dobradas (*Double-Entry Bookkeeping*)
@@ -110,6 +124,14 @@ Quando dois clientes realizam transferências cruzadas simultâneas (ex.: $A \to
 * Se a chave já existir:
   - Com o **mesmo hash**: retorna a resposta original em cache (`HTTP 200 OK`, `Idempotency-Replay: true`).
   - Com **hash divergente**: rejeita com `HTTP 409 Conflict` (ProblemDetail RFC 7807).
+
+### 4. Transactional Outbox Pattern & Webhooks Criptografados (HMAC-SHA256)
+Em arquiteturas orientadas a eventos e mensageria distribuída (Kafka / RabbitMQ / Webhooks), publicar diretamente na rede durante uma transação de banco de dados incorre no risco clássico de **Dual-Write** (o banco comita mas o webhook falha, ou o webhook é enviado mas o banco sofre rollback).
+* **Solução:** O evento de domínio `TransferSettledEvent` é persistido na tabela `ledger.outbox_events` de forma **100% atômica** e dentro da mesmíssima transação ACID que debita e credita as contas contábeis.
+* **Dispatcher Assíncrono com Backoff Exponencial:** Um poller em background (`OutboxDispatcher`) busca periodicamente eventos com status `PENDING` e executa a entrega com retentativas calculadas por $2^{\text{retryCount}} \times 5\text{s}$.
+* **Assinatura HMAC-SHA256 com Proteção Anti-Timing-Attack:**
+  - Cada payload de webhook é assinado com cabeçalho `X-Ledger-Signature: t={timestamp},v1={hash_hmac}`.
+  - A validação de assinaturas emprega comparação de tempo constante (`MessageDigest.isEqual`) prevenindo ataques de canal lateral (*timing attacks*).
 
 ---
 
@@ -160,6 +182,8 @@ Com a aplicação rodando, acesse a interface Swagger interativa:
 | `GET` | `/api/v1/accounts/{id}/balance` | Consulta saldo disponível em tempo real | `200 OK`, `404 Not Found` |
 | `GET` | `/api/v1/transactions` | Consulta livro-razão auditável com todas as pernas contábeis | `200 OK` |
 | `GET` | `/api/v1/transactions/{id}` | Consulta detalhes de uma transação e hash SHA-256 | `200 OK`, `404 Not Found` |
+| `POST` | `/api/v1/webhooks/verify-signature` | Valida assinatura HMAC-SHA256 de webhook recebido | `200 OK (valid: true/false)` |
+| `POST` | `/api/v1/webhooks/listener` | Endpoint simulador para recepção de eventos de liquidação | `200 OK (received: true)` |
 
 ---
 
@@ -216,6 +240,7 @@ O repositório segue governança estrita de branches e Pull Requests documentado
   * [PR #7: feat(api): implement REST controllers, RFC 7807 problem details, Spring Security 6, OpenAPI, and ArchUnit rules](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/7) (Merged)
   * [PR #8: test(integration): implement Testcontainers PostgreSQL 16 suite with anti-deadlock concurrency stress and idempotency burst tests](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/8) (Merged)
   * [PR #9: feat(observability): Micrometer Prometheus metrics, Actuator health indicator and technical docs](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/9) (Merged)
+  * [PR #10: feat(outbox): implement Transactional Outbox Pattern with HMAC-SHA256 webhook dispatcher and retries](https://github.com/Mauricio-G-Oliveira/fintech-core-ledger/pull/10) (Merged)
 
 ---
 
@@ -227,6 +252,7 @@ O repositório segue governança estrita de branches e Pull Requests documentado
 - [x] **Fase 5 (Concluída):** Camada REST API (`TransferController`, `AccountController`, `TransactionController`), RFC 7807 ProblemDetail, Spring Security 6, OpenAPI 3.0 e regras ArchUnit.
 - [x] **Fase 6 (Concluída):** Suíte de testes reais com **Testcontainers** simulando 100 transferências simultâneas em PostgreSQL real sem deadlocks.
 - [x] **Fase 7 (Concluída):** Observabilidade com **Micrometer & Prometheus**, Latency Timers, Actuator Health Checks e documentação técnica completa.
+- [x] **Fase 8 (Concluída):** Transactional Outbox Pattern, publicação assíncrona de eventos de liquidação, retentativas com backoff exponencial e assinaturas criptográficas Webhook HMAC-SHA256 (prevenção contra timing-attacks).
 
 ---
 
